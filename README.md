@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/ss1738/qedra/actions/workflows/ci.yml/badge.svg)](https://github.com/ss1738/qedra/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![ss1738/qedra MCP server](https://glama.ai/mcp/servers/ss1738/qedra/badges/score.svg)](https://glama.ai/mcp/servers/ss1738/qedra)
 
 <p align="center">
   <img src="docs/demo.svg" alt="A hijacked coding agent tries to force-push main, rm -rf the repo, leak a secret and wipe CI; qedra blocks every one while the real fix goes through" width="760">
