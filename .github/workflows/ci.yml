@@ -1,4 +1,6 @@
 name: CI
+permissions:
+  contents: read
 on:
   push:
     branches: [main]
@@ -6,38 +8,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: pip install -e .            # installs the package + deps (z3-solver, cryptography)
-      - name: guardrail suite
-        run: python3 tests/test_guardrail.py
-      - name: control-plane suite
-        run: python3 tests/test_control_plane.py
-      - name: zk suite
-        run: python3 tests/test_zk.py
-      - name: zk elliptic-curve suite
-        run: python3 tests/test_zk_ec.py
-      - name: zk receipt suite
-        run: python3 tests/test_zk_receipt.py
-      - name: tool-gate suite
-        run: python3 tests/test_tool_gate.py
-      - name: policy-spec suite
-        run: python3 tests/test_policy_spec.py
-      - name: policy-cli suite
-        run: python3 tests/test_policy_cli.py
-      - name: audit-log suite
-        run: python3 tests/test_audit_log.py
-      - name: verify-server suite
-        run: python3 tests/test_verify_server.py
-      - name: presets suite
-        run: python3 tests/test_presets.py
-      - name: claude-code hook suite
-        run: python3 tests/test_claude_code_hook.py
+          python-version: ${{ matrix.python-version }}
+      - run: pip install uv==0.11.14
+      - run: uv sync --frozen --extra mcp --extra dev --python "$(command -v python3)"
+      - name: all tests (including MCP and attestation)
+        run: uv run --no-sync python3 -m pytest -q
+      - name: package lint
+        run: uv run --no-sync python3 -m ruff check qedra
       - name: cli smoke (packaging + console scripts)
         run: |
+          export PATH="$PWD/.venv/bin:$PATH"
           qedra-verify --help
           qedra-policy init --protected main,release
           qedra-policy init --preset devops --out /tmp/ci-devops-spec.json

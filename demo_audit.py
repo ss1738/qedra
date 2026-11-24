@@ -40,7 +40,7 @@ def main():
     r = receipt_from_log(path, "acme/deploy-agent", policy, key)
     v = verify_receipt(Receipt.from_json(r.to_json()), policy)
     print(f"  reconstructed signed receipt   : {len(r.entries)} actions -> {'VERIFIED' if v.ok else 'REJECTED'}")
-    print("\nA killed agent still leaves proof of exactly what it did.\n")
+    print("\nThe partial decision log can be signed; it does not prove execution or completeness.\n")
 
 
 if __name__ == "__main__":

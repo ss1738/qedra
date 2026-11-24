@@ -1,98 +1,72 @@
-# Agent Control Plane - what a verified receipt guarantees
+# Receipt trust model
 
-This is the document a security reviewer, an auditor, or an insurer should read before relying on an
-Agent Control Plane receipt. It states precisely what a `VERIFIED` result proves, what it does not, and
-the assumptions it rests on. It deliberately does not overclaim: a receipt is measurement provenance for
-an agent's gated actions, not a proof that the agent (or the model behind it) is "safe".
+A receipt is a signed statement about a recorded sequence of policy decisions.
+Its cryptographic checks establish consistency and attribution under the supplied
+policy. They cannot establish that the recorded sequence is complete or that the
+operator actually executed or blocked a command.
 
-## What `verify_receipt` -> VERIFIED proves
+## What verification checks
 
-For a receipt that verifies against a policy the relying party holds (and, with `--registry`, a pinned
-public key), all of the following hold:
+1. The receipt's policy label and root match the verifier's expected policy.
+2. Recomputing the chain matches every entry head and the signed final head.
+3. The Ed25519 signature matches the key. A pinned key or verifier-controlled
+   registry is needed to associate that key with a known agent.
+4. Disclosed actions match their commitments and reproduce the recorded verdict.
+   Supported experimental ZK entries instead prove membership of a Git-policy
+   projection. The result reports how many entries have been checked for soundness.
+5. Entries with `BLOCK` or `ESCALATE` are not marked executed.
 
-1. **Policy identity.** The trace was gated under the exact policy the verifier holds: the receipt's
-   `policy_root` equals `Policy(id, version, spec).root()`, where the root is
-   `sha256(id | version | spec.content_hash())`. The commitment binds the ruleset's *content* (the
-   protected branches and any extra secret/shell patterns), not just a version label, so a receipt
-   produced under different rules hashes to a different root and is rejected.
-2. **Integrity.** The recorded action trace is untampered. The public SHA-256 hash-chain is recomputed
-   from genesis; any inserted, deleted, reordered, or altered entry breaks it. No key is needed for
-   this check - anyone can recompute it.
-3. **Authenticity.** The Ed25519 signature over the chain head is valid for the receipt's key, and (with
-   a registry or `--pin-key`) that key is the one pinned to the claimed `agent_id`. An attacker who
-   signs a compliant trace but impersonates a registered identity is rejected.
-4. **Soundness (the load-bearing check).** Re-running the committed policy over each recorded action
-   reproduces the recorded verdict. So a receipt that claims `ALLOW` for an action the policy would
-   `BLOCK` fails - **even when the operator recomputed the chain and re-signed with their own key.**
-   An honest receipt and a forged one are cryptographically distinguishable by anyone.
-5. **Enforcement.** No action recorded as `BLOCK` is marked executed.
+`executed` is supplied by the recorder. In the executor it means the operation was
+attempted, not that its exit status was successful. In a PreToolUse hook it is
+always false because the hook cannot observe a later outcome. `ControlPlane.gate`
+is a decision-recording helper and does not run a command.
 
-In short: *within the gated tool-call path, under this named policy, this exact sequence of actions was
-evaluated, these were the verdicts, and the blocked ones did not run - provably, to a third party who
-trusts neither the operator nor the server.*
+## What verification cannot establish
 
-## What it does NOT prove
+An operator holding the signing key can omit an action, fabricate a benign action,
+or issue a different, internally consistent receipt. Re-running the policy catches
+a false verdict attached to a disclosed action; it does not catch a replacement
+trace containing only compliant actions. A signature does not prove observation.
+Use an independently trusted recorder and externally retained checkpoints if
+completeness or execution evidence is required.
 
-- **Not the model's intent or "safety".** The receipt says nothing about whether the agent's reasoning
-  was correct or benign - only what actions it emitted and how the policy scored them.
-- **Not that the policy is complete.** The guarantee is relative to the committed policy. If the policy
-  has a gap (a threat it does not encode), a harmful-but-allowed action verifies as compliant. The
-  policy is auditable and its git-branch sub-policy is z3-checked, but the ruleset is otherwise
-  high-precision heuristics (see the main README's "proven vs heuristic" table).
-- **Not actions taken outside the gate.** The receipt covers only calls that went through the Control
-  Plane. If the agent has another execution path (an unguarded shell, or the ability to edit the gate),
-  those actions are neither gated nor in the receipt. See `THREAT_MODEL.md`.
-- **Not the truth of the inputs.** Like any attestation, it proves the gate reported faithfully on the
-  actions it saw; it cannot prove the environment fed the agent honest data.
+The policy root commits to the policy identifier, version, and serialized
+`PolicySpec`. Built-in rules are identified by a version label, not a hash of the
+Python source. Retain the matching software revision as well as the spec when
+reproducing a historical result. The z3 model covers a finite structured Git
+sub-policy; it does not verify the parser, executor, or heuristics.
 
-## Trust assumptions
+The gate and its keys must be inaccessible to the agent. A separate process alone
+is insufficient if both processes have write/read access to the same source or
+keys. The executor does not provide OS isolation, network controls, or a complete
+filesystem boundary.
 
-- **The gate runs out-of-process from the agent.** If the agent can read the signing key or modify the
-  gate/policy, it can forge or bypass. Run the Control Plane as a separate process/service; give the
-  agent no other route to shell, files, or git. This is the same assumption as the gate itself.
-- **Key custody.** The Ed25519 signing key is the agent operator's; the receipt is only as trustworthy
-  as that key not being available to the agent. Persist it (`GUARDRAIL_SIGNING_KEY`) so a relying party
-  can pin one identity across sessions.
-- **The registry is a trust root the *verifier* holds.** Pinning `agent_id -> public key` must happen
-  out-of-band and be under the relying party's control; it is intentionally not signed by the operator
-  (that would be circular), exactly like a CA's registration or SSH `known_hosts`.
-- **The verifier independently holds the policy.** The soundness re-run is only meaningful because the
-  verifier reconstructs the policy themselves; taking the policy on the receipt's word makes check 1
-  vacuous. Ship the policy spec to relying parties, versioned; they pass it with
-  `qedra-verify --policy-spec spec.json`, and its content hash must match the receipt's root.
+## Durable logs
 
-## Privacy: redaction and selective disclosure
+The JSONL audit log has a public hash chain, not a signature per entry. It detects
+an inconsistent edit, insertion, deletion, or reorder against retained chain
+links. It cannot detect removal of a valid suffix or a complete rewrite with
+recomputed hashes. `qedra-attest` checks chain consistency before signing the
+current snapshot; that does not prove the snapshot matches a previous session.
 
-The chain is over a salted commitment of each action, not the raw action, so a receipt can be redacted
-without invalidating its signature or integrity. `receipt.redact(reveal=...)` strips the raw commands
-and file contents (which would otherwise leak secrets and internal state) and returns a witness holding
-the redacted `(action, salt)` pairs. The operator can then disclose any subset to a verifier.
+Logs contain raw actions and may contain blocked secrets. New files use mode 600.
+Hook read/resume/append transactions are serialized with POSIX file locks. Use one
+log per MCP process and do not mix writers from different integrations. Logging
+failures do not stop gating and can leave an incomplete persisted trail.
 
-- A **redacted** receipt (no witness) proves policy identity, integrity, authenticity, and the
-  enforcement invariant - but NOT soundness, because the verifier cannot re-run the policy on hidden
-  actions. `verify_receipt` reports the coverage (`N disclosed and sound, M redacted`) so this is never
-  mistaken for a full guarantee.
-- A **witness** (full or partial) restores the soundness re-run for exactly the disclosed actions; a
-  disclosed action whose content does not match its commitment is rejected.
+## Redaction
 
-This is commitment-based selective disclosure. A zero-knowledge proof of "the hidden action satisfied
-the committed policy" (proving soundness *without* disclosure) is the natural next step and does not
-change this trust model's guarantees, only how much must be revealed to obtain them.
+Redaction removes action data and salts while retaining the signed chain. New
+receipts use generic reasons so paths and branch names are not retained there.
+Older receipts can retain identifying paths in their signed reason strings;
+inspect them before sharing. Agent and policy labels remain visible in all modes.
+The disclosure witness contains private action data and must be stored separately.
 
-## Attacks defeated vs. out of scope
+Without a witness or a supported ZK proof, a hidden entry has integrity and
+signature checks only. A successful result for a partially hidden receipt must
+not be described as full policy soundness.
 
-| Attempt | Result |
-|---|---|
-| Alter/insert/delete/reorder a recorded action | caught (chain integrity) |
-| Claim ALLOW for a would-be-BLOCK action, re-chain + re-sign with the operator's key | caught (soundness re-run) |
-| Sign a compliant trace but impersonate a registered agent | caught (pinned key mismatch) |
-| Issue under a different/weaker policy and hope the verifier does not notice | caught (policy commitment) if the verifier supplies the policy they expect |
-| Take a harmful action the policy does not encode | NOT caught - it is a policy gap, and the receipt honestly records it as allowed |
-| Take an action outside the gated path (unguarded shell, editing the gate) | NOT covered - outside the Control Plane's remit; pair with process isolation |
-
-## The honest one-liner
-
-A verified receipt is proof of **policy-compliant, tamper-evident, agent-attributable action provenance**
-over the gated path - nothing more, and nothing less. That is a real and currently-unmet primitive for
-anyone who has to trust what an autonomous agent did without having been in the room. It is not a safety
-certificate for the agent.
+Both custom ZK backends require external cryptographic review. A proof covers the
+Git action's encoded policy projection, not its complete command text or actual
+execution. Pure-Python cryptographic arithmetic is not a hardened, constant-time
+implementation. Do not treat these experimental proofs as production assurance.

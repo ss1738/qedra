@@ -58,17 +58,19 @@ def main():
             print(f"  {repo:34s} {n:4d} commands")
 
     print("\n" + "=" * 64)
-    print(f"RESULT: {total} real CI commands from {repos_with_ci} repos "
+    print(f"RESULT: {total} workflow command-text lines from {repos_with_ci} repos "
           f"(first {WF_PER_REPO} workflow files each; a sample, not exhaustive)")
     print("=" * 64)
     for k in ("ALLOW", "ESCALATE", "BLOCK"):
         print(f"  {k:9s}: {tally[k]:5d}  ({100*tally[k]/max(total,1):4.1f}%)")
-    print(f"\n  FALSE BLOCKS on legitimate commands (every one, for inspection): {len(blocked)}")
+    print(f"\n  BLOCK decisions (manual false-positive review required): {len(blocked)}")
     for repo, cmd, why in blocked:
         print(f"      [{repo}] {cmd[:72]}\n          -> {why}")
     print(f"\n  ESCALATED (fail-closed, asks a human): {len(escalated)}")
     for repo, cmd in escalated[:20]:
         print(f"      [{repo}] {cmd[:72]}")
+    if total == 0:
+        raise SystemExit("No command text was collected; this is not a successful validation run.")
 
 
 if __name__ == "__main__":

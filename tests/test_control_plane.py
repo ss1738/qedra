@@ -63,7 +63,9 @@ PASS = FAIL = 0
 def check(name, cond):
     global PASS, FAIL
     if cond: PASS += 1; print(f"  ok   {name}")
-    else: FAIL += 1; print(f"  FAIL {name}")
+    else:
+        FAIL += 1
+        raise AssertionError(name)
 
 
 def test_honest_receipt_verifies():

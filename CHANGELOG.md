@@ -1,6 +1,28 @@
 # Changelog
 
-All notable changes to qedra are recorded here. This project adheres to semantic versioning.
+Changes to qedra. Published package versions can lag the repository.
+
+## Unreleased
+
+- Constrain the MCP SDK to the supported 1.x API, require Python 3.10+, and add a
+  dependency lock plus CI coverage for all tests, MCP, attestation, and package lint.
+- Resolve actual/custom Git branches, handle force refspecs and mirror pushes,
+  preserve quoted arguments, and refuse unresolved force destinations/global options.
+- Reject malformed tool inputs and receipts; bind the displayed policy label to
+  the expected policy; stop marking escalations or pre-tool permissions as execution.
+- Keep private paths out of new receipt reasons and commands/secrets out of webhook
+  payloads. Create audit files with restrictive permissions.
+- Serialize hook log updates, resume valid MCP logs, check one log snapshot during
+  attestation, warn on persistence failures, and publish signing keys atomically.
+- Use independent random HMAC keys and full chain heads; detect in-memory log truncation.
+- Bound HTTP verification request bodies and add connection timeouts.
+- Replace fixed demo directories with unique temporary paths and distinguish
+  synthetic hook payloads from actual agent execution.
+- Align package version metadata, remove duplicate ignore/CI entries and stale
+  registry instructions, and rewrite security claims around tested scope.
+
+Historical benchmark counts below are release notes, not current baselines. The
+repository does not contain a frozen corpus/result artifact for those counts.
 
 ## [0.3.0]
 

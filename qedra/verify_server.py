@@ -2,7 +2,7 @@
 
 Relying parties do not want to run Python to check a receipt. This exposes the same
 `verify_receipt` logic over HTTP: the operator (or the relying party) runs the server with the policy
-THEY hold, and anyone can `POST /verify` a receipt to get a signed yes/no.
+THEY hold, and anyone can `POST /verify` a receipt to get a JSON result.
 
     POST /verify   body: {"receipt": {...}, "witness": {...}?}   -> {"ok": bool, "reason": str, ...}
     GET  /health                                                 -> {"status": "ok"}
@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 from .control_plane import Policy, Receipt, verify_receipt
 from .registry import Registry
@@ -26,6 +26,11 @@ class _VerifyHandler(BaseHTTPRequestHandler):
     policy = None
     pinned = None
     registry = None
+    max_body_bytes = 2 * 1024 * 1024
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(10)
 
     def _send(self, code: int, obj: dict) -> None:
         body = json.dumps(obj).encode()
@@ -48,6 +53,10 @@ class _VerifyHandler(BaseHTTPRequestHandler):
             return
         try:
             n = int(self.headers.get("Content-Length", 0))
+            if n <= 0 or n > self.max_body_bytes:
+                self._send(413 if n > self.max_body_bytes else 400,
+                           {"error": "Content-Length must be between 1 and 2097152 bytes"})
+                return
             payload = json.loads(self.rfile.read(n))
         except Exception:
             self._send(400, {"error": "body must be JSON"})
@@ -85,7 +94,7 @@ def build_server(policy: Policy, host: str = "127.0.0.1", port: int = 8787,
     """Create (but do not start) the HTTP server. Call `serve_forever()` on the result, or use it in a
     thread for tests."""
     handler = type("_H", (_VerifyHandler,), {"policy": policy, "pinned": pinned, "registry": registry})
-    return HTTPServer((host, port), handler)
+    return ThreadingHTTPServer((host, port), handler)
 
 
 def main(argv: list[str] | None = None) -> int:

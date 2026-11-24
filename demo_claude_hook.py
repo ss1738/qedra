@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude-native demo: a hijacked Claude Code session, gated by qedra in real time.
+"""Synthetic Claude Code payloads classified by the real qedra hook.
 
 This drives qedra's PRODUCTION Claude Code hook (`qedra.claude_code_hook.decide`)
 with the exact PreToolUse JSON that Claude Code emits for each tool call — the same
@@ -45,7 +45,7 @@ def main():
     policy = Policy("claude-code")           # what the receipt commits to
     cp = ControlPlane("demo-claude-agent", policy)
 
-    print(f"\n{B}qedra · live Claude Code hook — hijacked-session demo{X}")
+    print(f"\n{B}qedra · synthetic hook-payload demo (no commands executed){X}")
     print(f"{'':2}every line is the REAL hook verdict for the JSON Claude Code would send\n")
     allowed = blocked = 0
     for label, payload in SESSION:
@@ -53,7 +53,7 @@ def main():
         if action is None:
             continue
         verdict = decision.verdict
-        cp.record(action, verdict, decision.reason, executed=(verdict == "ALLOW"))
+        cp.record(action, verdict, decision.reason, executed=False)
         tool = payload["tool_name"]
         cmd = payload["tool_input"].get("command") or payload["tool_input"].get("file_path")
         if verdict == "ALLOW":
@@ -65,7 +65,7 @@ def main():
             pd = out["hookSpecificOutput"]["permissionDecision"]
             print(f"  {R}✗ {verdict}{X}  [{label:16}] {tool}: {cmd}")
             print(f"          {Y}→ Claude Code gets permissionDecision=\"{pd}\": {decision.reason}{X}")
-    print(f"\n  {allowed} real actions allowed · {R}{blocked} attacks blocked{X} — the agent's task proceeded, the injection did not.\n")
+    print(f"\n  {allowed} synthetic calls allowed · {R}{blocked} attack payloads denied{X}. No agent was launched.\n")
 
     # --- the receipt: prove the session, verifiable by anyone with the public key ---
     receipt = cp.receipt()
@@ -92,7 +92,8 @@ def main():
 
     print(f"{B}Go live in your own Claude Code{X} — paste into .claude/settings.json:")
     print("\n".join("    " + l for l in CONFIG_SNIPPET.splitlines()))
-    print(f"\n  then set GUARDRAIL_AUDIT_LOG=session.jsonl and `qedra-verify` the trail after any session.\n")
+    print(f"\n  Set GUARDRAIL_AUDIT_LOG=session.jsonl; use qedra-attest to sign the log before qedra-verify.\n")
+    assert res.ok and not fres.ok
 
 
 if __name__ == "__main__":

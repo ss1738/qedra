@@ -7,16 +7,17 @@ z3 PROVES the git-op policy has no hole: there is no action the guard admits tha
 mutates protected-branch history. That self-verification, finding gaps in your
 own policy, is what a regex allowlist cannot do.
 
-Honest scope: git ops and file writes are modelled and covered by the soundness
-proof. Raw shell is matched against known-destructive patterns; anything not
-provably simple is ESCALATED (fail-closed), never silently allowed.
+The z3 model covers only the structured git-branch sub-policy, not execution,
+file writes, or shell parsing. Shell commands default to ALLOW unless a heuristic
+matches; ambiguous history rewrites escalate for human review.
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import hashlib
 import hmac
 import json
 import re
+import secrets
 
 PROTECTED = ("main", "master", "release")
 
@@ -35,6 +36,17 @@ class PolicySpec:
     extra_shell_denylist: tuple[str, ...] = ()       # extra regexes blocked outright in shell
     ruleset_version: str = "qedra/threat-model/v1"   # bump when the built-in rules change
 
+    def __post_init__(self):
+        for name in ("protected_branches", "extra_secret_patterns", "extra_shell_denylist"):
+            values = getattr(self, name)
+            if not isinstance(values, (tuple, list)) or any(not isinstance(v, str) for v in values):
+                raise ValueError(f"{name} must be a list of strings")
+            if name == "protected_branches" and (len(set(values)) != len(values) or any(not v or "\x00" in v for v in values)):
+                raise ValueError("protected branches must be unique, nonempty names without NUL")
+            object.__setattr__(self, name, tuple(sorted(values)) if name == "protected_branches" else tuple(values))
+        if not isinstance(self.ruleset_version, str) or not self.ruleset_version:
+            raise ValueError("ruleset_version must be a nonempty string")
+
     def canonical(self) -> str:
         return json.dumps({
             "protected_branches": sorted(self.protected_branches),
@@ -52,11 +64,16 @@ class PolicySpec:
     @staticmethod
     def from_json(s: str) -> "PolicySpec":
         d = json.loads(s)
+        if not isinstance(d, dict):
+            raise ValueError("policy spec must be an object")
+        allowed = {"protected_branches", "extra_secret_patterns", "extra_shell_denylist", "ruleset_version"}
+        if set(d) - allowed:
+            raise ValueError(f"unknown policy fields: {sorted(set(d) - allowed)}")
         base = PolicySpec()
         return PolicySpec(
-            protected_branches=tuple(d.get("protected_branches", base.protected_branches)),
-            extra_secret_patterns=tuple(d.get("extra_secret_patterns", ())),
-            extra_shell_denylist=tuple(d.get("extra_shell_denylist", ())),
+            protected_branches=d.get("protected_branches", base.protected_branches),
+            extra_secret_patterns=d.get("extra_secret_patterns", ()),
+            extra_shell_denylist=d.get("extra_shell_denylist", ()),
             ruleset_version=d.get("ruleset_version", base.ruleset_version),
         )
 
@@ -153,12 +170,12 @@ class Decision:
 
 
 class Guardrail:
-    def __init__(self, spec: PolicySpec = DEFAULT_SPEC, hmac_key: bytes = b"qedra-v0"):
+    def __init__(self, spec: PolicySpec = DEFAULT_SPEC, hmac_key: bytes | None = None):
         self.spec = spec
         self._protected = tuple(spec.protected_branches)
         self._extra_secret = [re.compile(p) for p in spec.extra_secret_patterns]
         self._extra_shell = [re.compile(p) for p in spec.extra_shell_denylist]
-        self._key = hmac_key
+        self._key = hmac_key if hmac_key is not None else secrets.token_bytes(32)
         self.head = hashlib.sha256(b"genesis").hexdigest()
         self.log: list[dict] = []
 
@@ -240,16 +257,16 @@ class Guardrail:
         rec = f"{d.verdict}|{d.reason}|{d.action_summary}"
         self.head = hmac.new(self._key, (self.head + rec).encode(), hashlib.sha256).hexdigest()
         self.log.append({"verdict": d.verdict, "reason": d.reason,
-                         "action": d.action_summary, "head": self.head[:12]})
+                         "action": d.action_summary, "head": self.head})
 
     def verify_chain(self) -> bool:
         h = hashlib.sha256(b"genesis").hexdigest()
         for e in self.log:
             rec = f"{e['verdict']}|{e['reason']}|{e['action']}"
             h = hmac.new(self._key, (h + rec).encode(), hashlib.sha256).hexdigest()
-            if h[:12] != e["head"]:
+            if h != e["head"]:
                 return False
-        return True
+        return h == self.head
 
     @staticmethod
     def _summ(a: Action) -> str:
@@ -290,9 +307,12 @@ def prove_policy_sound(spec: PolicySpec = DEFAULT_SPEC, skip=()):
 
     # the guard's ALLOW predicate (mirror of _classify git branch)
     blocks = []
-    if "push" not in skip:  blocks.append(z3.And(op == _OP["push"], force, protected))
-    if "reset" not in skip: blocks.append(z3.And(op == _OP["reset"], hard, protected))
-    if "rebase" not in skip: blocks.append(z3.And(op == _OP["rebase"], protected))
+    if "push" not in skip:
+        blocks.append(z3.And(op == _OP["push"], force, protected))
+    if "reset" not in skip:
+        blocks.append(z3.And(op == _OP["reset"], hard, protected))
+    if "rebase" not in skip:
+        blocks.append(z3.And(op == _OP["rebase"], protected))
     allow = z3.Not(z3.Or(*blocks)) if blocks else z3.BoolVal(True)
 
     s = z3.Solver()

@@ -17,6 +17,8 @@ before it runs) and recorded into the Control Plane receipt. Register the tools 
 """
 from __future__ import annotations
 
+import subprocess
+
 from .control_plane import ControlPlane
 from .executor import Executor
 from .guardrail import Guardrail
@@ -55,7 +57,7 @@ def _schema(t: dict) -> dict:
 
 
 def openai_tools() -> list[dict]:
-    """The gated tools in OpenAI `tools` format (for chat.completions / responses)."""
+    """The gated tools in OpenAI Chat Completions format."""
     return [{"type": "function",
              "function": {"name": t["name"], "description": t["description"], "parameters": _schema(t)}}
             for t in _TOOLS]
@@ -87,16 +89,25 @@ class ToolGate:
         """Execute one tool call after gating it. Returns the tool result string (a blocked call returns
         a ⛔ message the model can read). Unknown tools and malformed arguments are refused fail-closed,
         never raised, so a hijacked or confused model cannot crash the loop or slip past the gate."""
-        args = arguments if isinstance(arguments, dict) else {}
+        if not isinstance(arguments, dict):
+            return "⛔ REFUSED: tool arguments must be an object."
+        args = arguments
+        tool = next((t for t in _TOOLS if t["name"] == name), None)
+        if tool is not None:
+            for key in tool["required"]:
+                if key not in args or not isinstance(args[key], str):
+                    return f"⛔ REFUSED: '{key}' must be a string."
         try:
             if name == "run_shell":
-                return self._exec.run_shell(str(args["cmd"]))
+                return self._exec.run_shell(args["cmd"])
             if name == "write_file":
-                return self._exec.write_file(str(args["path"]), str(args["content"]))
+                return self._exec.write_file(args["path"], args["content"])
             if name == "git":
-                return self._exec.git(str(args["args"]))
+                return self._exec.git(args["args"])
         except KeyError as e:
             return f"⛔ REFUSED: tool '{name}' is missing required argument {e}."
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            return f"⛔ ERROR: tool '{name}' failed ({type(e).__name__})."
         return f"⛔ REFUSED: '{name}' is not in the gated toolset {[t['name'] for t in _TOOLS]}."
 
     def receipt(self):

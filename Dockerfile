@@ -17,4 +17,4 @@ ENV GUARDRAIL_WORKSPACE=/workspace
 RUN mkdir -p /workspace
 
 # stdio MCP server
-CMD ["python", "integrations/mcp_server.py"]
+CMD ["qedra-mcp"]

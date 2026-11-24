@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# One command, no install beyond qedra itself: watch a hijacked Claude Code session
-# get gated by qedra in real time, then see the signed receipt verified and a forged
-# one rejected. Uses the REAL production hook (qedra.claude_code_hook) — not a mock.
+# Classify synthetic Claude Code hook payloads, verify their decision receipt,
+# and reject a forged verdict. This does not launch Claude Code or execute tools.
 #
 #   ./claude-integration.sh
 #
-# Reviewer-friendly: no API key, no network, runs in ~1s.
+# No API key or network required.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 

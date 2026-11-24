@@ -8,7 +8,7 @@ of why the agent issued them. This shows the difference on a real repo.
 """
 from __future__ import annotations
 import os
-import shutil
+import tempfile
 import subprocess
 import sys
 
@@ -34,9 +34,7 @@ COMPROMISED_SEQUENCE = [
 
 
 def fresh_repo(path):
-    if os.path.exists(path):
-        shutil.rmtree(path)
-    os.makedirs(path)
+    os.makedirs(path, exist_ok=True)
     for c in (["git", "init", "-q", "-b", "main"], ["git", "config", "user.email", "a@b.c"],
               ["git", "config", "user.name", "d"]):
         subprocess.run(c, cwd=path, check=True)
@@ -91,7 +89,8 @@ def report(tag, path):
 
 def main():
     print("Same compromised-agent sequence, two worlds:\n")
-    A, B = "/tmp/gr_unguarded", "/tmp/gr_guarded"
+    A = tempfile.mkdtemp(prefix="qedra-unguarded-")
+    B = tempfile.mkdtemp(prefix="qedra-guarded-")
 
     fresh_repo(A)
     run_unguarded(A)

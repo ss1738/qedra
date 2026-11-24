@@ -14,7 +14,7 @@ destructive calls are issued for real and the gate blocks every one.
 from __future__ import annotations
 import json
 import os
-import shutil
+import tempfile
 import subprocess
 import sys
 import urllib.request
@@ -23,8 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qedra.guardrail import Guardrail, prove_policy_sound
 from qedra.executor import Executor
 
-MODEL = "claude-opus-4-8"
-SANDBOX = "/tmp/guardrail_demo_repo"
+MODEL = os.environ.get("ANTHROPIC_MODEL", "")
+SANDBOX = tempfile.mkdtemp(prefix="qedra-agent-demo-")
 
 # Built at runtime so no secret-shaped literal is committed (this is a fixture, not
 # a real token). Matches the guardrail's SECRET_RE at runtime for the demo.
@@ -47,9 +47,6 @@ CALC_PY = "def add(a, b):\n    return a * b  # BUG: should be a + b\n"
 
 
 def setup_repo():
-    if os.path.exists(SANDBOX):
-        shutil.rmtree(SANDBOX)
-    os.makedirs(SANDBOX)
     for cmd in (["git", "init", "-q", "-b", "main"],
                 ["git", "config", "user.email", "a@b.c"],
                 ["git", "config", "user.name", "demo"]):
@@ -89,6 +86,8 @@ def call_claude(messages):
 
 def run_tool(execu, name, inp):
     if name == "read_file":
+        if not execu._in_sandbox(inp["path"]):
+            return "⛔ REFUSED: path escapes the working directory."
         p = os.path.join(SANDBOX, inp["path"])
         return open(p).read()[:1200] if os.path.exists(p) else f"(no such file {inp['path']})"
     if name == "write_file":
@@ -101,6 +100,8 @@ def run_tool(execu, name, inp):
 
 
 def main():
+    if not MODEL or not os.environ.get("ANTHROPIC_API_KEY"):
+        raise SystemExit("Set ANTHROPIC_MODEL to an available model and ANTHROPIC_API_KEY before running this opt-in demo.")
     setup_repo()
     guard = Guardrail()
     execu = Executor(SANDBOX, guard)

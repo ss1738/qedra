@@ -1,0 +1,2 @@
+include SECURITY.md THREAT_MODEL.md CHANGELOG.md WRITEUP.md
+recursive-include docs *.md

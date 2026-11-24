@@ -1,6 +1,6 @@
 """`qedra-hook` -- a Claude Code PreToolUse hook.
 
-Claude Code is the ICP: a coding agent that runs shell commands on your machine. It has a native
+Claude Code has a native
 `PreToolUse` hook that hands every tool call to an external command as JSON on stdin and lets that
 command block it. This wires the guardrail into that seam, so the same gate that the receipts prove
 runs on real tool calls with no framework code:
@@ -22,7 +22,7 @@ Policy comes from the environment so one installed hook serves any repo:
 
 Fail-open by design: any internal error in the hook prints a note to stderr and lets the call proceed.
 A buggy security hook that bricks the agent gets uninstalled; the gate's remit is high-precision blocks
-on a defined threat model, not being a single point of failure for the whole session. Stdlib only.
+on a defined threat model. Optional audit recording also uses the package's cryptographic dependencies.
 """
 from __future__ import annotations
 
@@ -30,23 +30,10 @@ import json
 import os
 import sys
 
-from .guardrail import Action, DEFAULT_SPEC, Guardrail
+from .guardrail import Action, Guardrail
+from .policy_config import policy_from_environment as _load_policy_spec
 
 HOOK_EVENT = "PreToolUse"
-
-
-def _load_policy_spec():
-    """Build the PolicySpec from the environment (spec file first, then presets layered on)."""
-    spec = DEFAULT_SPEC
-    path = os.environ.get("GUARDRAIL_POLICY_SPEC")
-    if path:
-        from .guardrail import PolicySpec
-        spec = PolicySpec.from_json(open(path).read())
-    presets = [p.strip() for p in os.environ.get("GUARDRAIL_PRESET", "").split(",") if p.strip()]
-    if presets:
-        from .presets import preset_spec
-        spec = preset_spec(*presets, base=spec)
-    return spec
 
 
 def action_from_tool_call(tool_name: str, tool_input: dict) -> Action | None:
@@ -98,16 +85,16 @@ def _hook_output(permission_decision: str, reason: str) -> dict:
     }}
 
 
-def _maybe_record(payload: dict, action: Action, decision) -> None:
+def _maybe_record(payload: dict, action: Action, decision, spec=None) -> None:
     """Best-effort: append the gated call to the durable trail and fire a block alert. Never raises."""
     path = os.environ.get("GUARDRAIL_AUDIT_LOG")
     if not path or action is None:
         return
     try:
-        from .audit_log import AuditLog
+        from .audit_log import AuditLog, verify_entries
         from .control_plane import ControlPlane, Policy
 
-        spec = _load_policy_spec()
+        spec = spec if spec is not None else _load_policy_spec()
         policy = Policy(os.environ.get("GUARDRAIL_POLICY_ID", "claude-code"),
                         os.environ.get("GUARDRAIL_POLICY_VERSION", "1"), spec)
         on_block = None
@@ -115,10 +102,17 @@ def _maybe_record(payload: dict, action: Action, decision) -> None:
         if url:
             from .alerts import webhook_alert
             on_block = webhook_alert(url)
-        cp = ControlPlane(payload.get("session_id", "claude-code"), policy,
-                          audit_log=AuditLog(path), on_block=on_block)
-        cp.resume(AuditLog.load(path))          # continue the file's hash-chain across processes
-        cp.record(action, decision.verdict, decision.reason, executed=(decision.verdict == "ALLOW"))
+        audit = AuditLog(os.path.expanduser(path))
+        with audit.locked():
+            entries = AuditLog.load(audit.path)
+            ok, why = verify_entries(entries)
+            if not ok:
+                raise ValueError(why)
+            cp = ControlPlane(payload.get("session_id", "claude-code"), policy,
+                              audit_log=audit, on_block=on_block)
+            cp.resume(entries)
+            # PreToolUse sees permission, not the eventual process outcome.
+            cp.record(action, decision.verdict, decision.reason, executed=False)
     except Exception as e:                       # logging must never break the hook
         print(f"qedra-hook: audit logging skipped ({e})", file=sys.stderr)
 
@@ -158,7 +152,7 @@ def main(argv: list[str] | None = None, stdin=None) -> int:
         guard = Guardrail(_load_policy_spec())
         out, action, decision = decide(payload, guard)
         if decision is not None:
-            _maybe_record(payload, action, decision)
+            _maybe_record(payload, action, decision, guard.spec)
         if out is not None:
             print(json.dumps(out))
     except Exception as e:

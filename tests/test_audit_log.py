@@ -124,7 +124,8 @@ def test_webhook_alert_posts_the_block():
         Action("git", op="push", branch="main", force=True), "force-push to protected branch 'main'")
     th.join(timeout=3); srv.server_close()
     d = _json.loads(received["body"])
-    assert d["verdict"] == "BLOCK" and "push main" in d["action"] and "force-push" in d["reason"]
+    assert d["verdict"] == "BLOCK" and d["action"] == "git"
+    assert "main" not in received["body"] and "push" not in received["body"]
 
 
 def test_webhook_alert_survives_a_dead_endpoint():

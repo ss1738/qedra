@@ -58,7 +58,7 @@ def build_server():
     from qedra.guardrail import Guardrail
     from qedra.executor import Executor
     from qedra.control_plane import ControlPlane, Policy
-    from qedra.audit_log import AuditLog
+    from qedra.audit_log import AuditLog, verify_entries
     from qedra.alerts import webhook_alert
 
     workspace = os.environ.get("GUARDRAIL_WORKSPACE", os.path.join(os.getcwd(), "workspace"))
@@ -71,13 +71,19 @@ def build_server():
     # One spec from the environment (default threat model + optional PolicySpec file + opt-in presets),
     # used for BOTH the enforcing gate and the receipt's committed policy, so what is blocked and what the
     # receipt commits to are the same ruleset. Reuses the hook's loader so the two integrations agree.
-    from qedra.claude_code_hook import _load_policy_spec
-    spec = _load_policy_spec()
+    from qedra.policy_config import policy_from_environment
+    spec = policy_from_environment()
     guard = Guardrail(spec)
     policy = Policy(os.environ.get("GUARDRAIL_POLICY_ID", "default-policy"), spec=spec)
     audit = AuditLog(os.environ["GUARDRAIL_AUDIT_LOG"]) if os.environ.get("GUARDRAIL_AUDIT_LOG") else None
     alert = webhook_alert(os.environ["GUARDRAIL_ALERT_URL"]) if os.environ.get("GUARDRAIL_ALERT_URL") else None
     control = ControlPlane(agent_id, policy, signing_key=_signing_key(), zk=zk, audit_log=audit, on_block=alert)
+    if audit is not None:
+        entries = AuditLog.load(audit.path)
+        ok, why = verify_entries(entries)
+        if not ok:
+            raise ValueError(why)
+        control.resume(entries)
     ex = Executor(workspace, guard, control_plane=control)
 
     mcp = FastMCP("qedra")
@@ -123,11 +129,9 @@ def build_server():
 
     @mcp.tool()
     def session_receipt(redact: bool = False) -> str:
-        """Export a signed, independently-verifiable RECEIPT for this session: the agent id, the committed
-        policy, every gated action with its verdict, and an Ed25519 signature over the tamper-evident chain
-        head. A third party (an auditor, a bank, an insurer) can verify it with the PUBLIC KEY ALONE via
-        qedra.control_plane.verify_receipt, proving the agent stayed within policy, without
-        trusting this server or its operator, and catching any forged ALLOW.
+        """Export a signed statement of recorded decisions. Verification checks its
+        signature, chain and disclosed policy verdicts, not execution or completeness.
+        Use an independently obtained policy and pinned key for attribution.
 
         redact=True strips every raw action (commands, file contents, branches) before returning. In
         zk-mode (GUARDRAIL_ZK=1) git-branch actions stay provably in-policy via their zero-knowledge proof

@@ -1,26 +1,15 @@
-"""Agent Control Plane: per-agent policy enforcement + an independently-verifiable RECEIPT.
+"""Signed policy-decision receipts with optional selective disclosure.
 
-qedra gates a single stream of tool calls. The Control Plane binds a *named, versioned
-policy* to an *agent identity*, records the gated action trace into a public hash-chain, and exports a
-compact **receipt** that a third party (an auditor, a bank, an insurer) can verify WITHOUT trusting the
-operator, and WITHOUT the operator's secret:
-
-  1. public SHA-256 hash-chain over the trace   -> tamper-evidence (no insert/delete/reorder/alter)
-  2. Ed25519 signature over the chain head       -> binds the trace to the agent's key (verify with the
-                                                    public key alone; the operator's secret never leaves)
-  3. the policy is committed as a hash           -> proves *which* policy was in force
-  4. the verifier RE-RUNS the policy on the trace -> catches a forged ALLOW: a receipt that claims a
-                                                    dangerous action was permitted fails, because the
-                                                    committed policy would have BLOCKed it.
-
-Check 4 is the point: an honest receipt and a forged one are cryptographically distinguishable by anyone
-holding only the receipt + the public policy definition. This is the artifact a relying party pays to
-trust, and the "0/N forged-SATISFIED" test in the go/no-go.
+Verification checks chain consistency, signature attribution and verdicts for
+disclosed actions (or experimental Git-policy projections). It does not establish
+execution or complete observation: a signer can fabricate a compliant trace.
+See docs/CONTROL_PLANE_TRUST_MODEL.md for the trust assumptions.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 from dataclasses import asdict, dataclass, field
 
@@ -37,8 +26,8 @@ from .guardrail import DEFAULT_SPEC, Action, Guardrail, PolicySpec
 GENESIS = hashlib.sha256(b"agent-control-plane/genesis").hexdigest()
 
 # ZK schemes: name -> (module with commit/prove/verify, its group with ser/deser). Both share the same
-# policy layer (encode/allowed_set in zk); only the group differs. MODP is the reviewed-shape default;
-# secp256k1 ("ec") is ~10x faster / ~8x smaller but is prototype crypto pending external review.
+# policy layer (encode/allowed_set in zk); only the group differs. Both backends
+# are experimental custom cryptography pending external review.
 _SCHEMES = {"modp": (_zk, _zk.MODP), "ec": (_zk_ec, _zk_ec.EC)}
 
 
@@ -97,12 +86,38 @@ class Receipt:
     public_key: str = ""   # hex Ed25519 public key
     signature: str = ""    # hex Ed25519 signature over the signing payload
 
+    def __post_init__(self):
+        for name in ("agent_id", "policy_id", "policy_root", "final_head", "public_key", "signature"):
+            if not isinstance(getattr(self, name), str):
+                raise ValueError(f"{name} must be a string")
+        if not isinstance(self.entries, list) or any(not isinstance(e, Entry) for e in self.entries):
+            raise ValueError("entries must be a list of receipt entries")
+        for e in self.entries:
+            if e.verdict not in ("ALLOW", "BLOCK", "ESCALATE") or type(e.executed) is not bool:
+                raise ValueError("invalid verdict or executed flag")
+            if any(not isinstance(getattr(e, n), str) for n in ("reason", "commit", "head", "salt", "zk_group")):
+                raise ValueError("entry metadata must be strings")
+            if e.action is not None:
+                if not isinstance(e.action, dict):
+                    raise ValueError("action must be an object or null")
+                action = Action(**e.action)
+                if any(not isinstance(getattr(action, n), str) for n in ("kind", "op", "branch", "path", "content", "cmd")):
+                    raise ValueError("action fields must be strings")
+                if type(action.force) is not bool or type(action.hard) is not bool:
+                    raise ValueError("action flags must be booleans")
+            if e.zk is not None:
+                if not isinstance(e.zk, dict):
+                    raise ValueError("zk proof must be an object")
+                _zk.ZKProof.from_dict(e.zk)
+
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
 
     @staticmethod
     def from_json(s: str) -> "Receipt":
         d = json.loads(s)
+        if not isinstance(d, dict) or not isinstance(d.get("entries"), list):
+            raise ValueError("receipt must be an object with an entries list")
         d["entries"] = [Entry(**e) for e in d["entries"]]
         return Receipt(**d)
 
@@ -162,8 +177,7 @@ class ControlPlane:
         # zk-mode: git-branch actions are committed with a Pedersen commitment and carry an eager
         # zero-knowledge proof, so they can be redacted yet remain provably in-policy. Other action
         # kinds keep the sha-256 commitment (ZK over regex/shell is out of scope; see ZK_ROADMAP).
-        # zk = True/"modp" -> the reviewed-shape default group; zk = "ec" -> secp256k1 (prototype,
-        # ~10x faster / ~8x smaller, pending external review).
+        # zk = True/"modp" -> MODP; zk = "ec" -> secp256k1. Both are prototypes.
         self._zk = bool(zk)
         self._group_name = ""
         if zk:
@@ -195,6 +209,9 @@ class ControlPlane:
         if self._zk and _zk.supports(action):
             self._record_zk(action, ad, verdict, executed)
             return
+        # Reasons survive redaction. Do not embed file paths, branches or secrets
+        # in signed metadata; the full action stays in the private disclosure.
+        reason = f"policy decision: {verdict}"
         salt = secrets.token_hex(16)
         commit = _commit(ad, salt)
         self._head = _chain_step(self._head, len(self._entries), commit, verdict, reason, executed)
@@ -208,13 +225,13 @@ class ControlPlane:
         if self._audit is not None:
             try:
                 self._audit.append(entry)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Audit write failed (%s)", type(exc).__name__)
         if entry.verdict == "BLOCK" and self._on_block is not None:
             try:
                 self._on_block(action, entry.reason)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Block alert failed (%s)", type(exc).__name__)
 
     def _record_zk(self, action: Action, ad: dict, verdict: str, executed: bool) -> None:
         """Record a git-branch action with a Pedersen commitment + an eager ZK proof. The reason is
@@ -234,9 +251,10 @@ class ControlPlane:
 
     def gate(self, action: Action) -> str:
         """Classify + record one action. Returns the verdict. A BLOCK is recorded as NOT executed (the
-        enforcement guarantee); ALLOW/ESCALATE are recorded as executed."""
+        enforcement invariant); only ALLOW is marked executed. This helper records
+        a simulated decision, not an independently observed process outcome."""
         verdict, reason = self.policy.classify(action)
-        self.record(action, verdict, reason, verdict != "BLOCK")
+        self.record(action, verdict, reason, verdict == "ALLOW")
         return verdict
 
     def receipt(self) -> Receipt:
@@ -269,6 +287,22 @@ def verify_receipt(
     pinned_public_key: str | None = None,
     witness: dict | None = None,
 ) -> VerifyResult:
+    """Reject malformed untrusted receipt/witness data without crashing callers."""
+    try:
+        receipt.__post_init__()
+        if witness is not None and not isinstance(witness, dict):
+            return VerifyResult(False, "malformed witness: expected an object")
+        return _verify_receipt(receipt, policy, pinned_public_key, witness)
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        return VerifyResult(False, "malformed receipt or disclosure witness")
+
+
+def _verify_receipt(
+    receipt: Receipt,
+    policy: Policy,
+    pinned_public_key: str | None = None,
+    witness: dict | None = None,
+) -> VerifyResult:
     """Verify a receipt. Works on a full receipt, a redacted one, or a redacted one plus a `witness`
     (which discloses some actions). Integrity, authenticity, and the policy commitment are always
     checked; the soundness re-run is checked for every action that is disclosed (inline or via the
@@ -277,7 +311,7 @@ def verify_receipt(
     witness = witness or {}
 
     # (0) the receipt must name the policy the verifier holds
-    if receipt.policy_root != policy.root():
+    if receipt.policy_id != policy.policy_id or receipt.policy_root != policy.root():
         return VerifyResult(False, "policy mismatch: receipt was issued under a different policy")
 
     # (1) public hash-chain integrity (over commitments, so redaction does not break it)
@@ -360,8 +394,8 @@ def verify_receipt(
 
     # (4) enforcement invariant: a BLOCKed action must never be marked executed
     for i, e in enumerate(receipt.entries):
-        if e.verdict == "BLOCK" and e.executed:
-            return VerifyResult(False, f"entry {i}: a BLOCKed action was executed")
+        if e.verdict != "ALLOW" and e.executed:
+            return VerifyResult(False, f"entry {i}: a {e.verdict} action was executed without policy approval")
 
     n = len(receipt.entries)
     sound = disclosed + zk_sound

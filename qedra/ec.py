@@ -5,10 +5,9 @@ elements serialize to ~600 decimal digits and every operation is a 2048-bit mode
 compress to 33 bytes and its scalars are 256-bit, so proofs are far smaller. The curve has cofactor 1
 (prime order n), so any on-curve point is a valid group element, no subgroup checks needed.
 
-This is affine arithmetic: correct and easy to audit, not speed-tuned (a production deployment would
-bind a native curve library; a Jacobian-coordinate rewrite is the pure-Python speed path). `self_check`
-validates the constants and the arithmetic against published test vectors, so a transcription error in
-any constant fails loudly, the same discipline as zk._group_ok.
+The implementation has an affine reference and a Jacobian multiplication path.
+`self_check` compares arithmetic with known-answer vectors. This is experimental,
+non-constant-time Python code without an external cryptographic audit.
 """
 from __future__ import annotations
 

@@ -3,13 +3,15 @@ name = "qedra"
 version = "0.3.0"
 description = "A runtime gate for autonomous coding agents. It blocks destructive tool calls (force-push main, rm -rf, secret exfil) while letting real work through. Its git-branch sub-policy is machine-checked by z3; the rest is high-precision heuristics."
 readme = "README.md"
-requires-python = ">=3.9"
-license = { text = "MIT" }
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Satyawan Singh" }]
 dependencies = ["z3-solver>=4.12", "cryptography>=42"]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0"]
+mcp = ["mcp>=1.0,<2"]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
 
 [project.scripts]
 qedra-verify = "qedra.verify_cli:main"
@@ -24,8 +26,17 @@ qedra-mcp = "qedra.mcp_server:main"
 Homepage = "https://github.com/ss1738/qedra"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["qedra"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

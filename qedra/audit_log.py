@@ -6,7 +6,8 @@ JSONL file as it happens, so a dead agent still leaves a trail on disk.
 
 Two properties the persisted log keeps:
   - Integrity (no key needed). The public SHA-256 hash-chain is recomputed over the file, so any
-    inserted, deleted, reordered, or altered line is caught by `verify_log`.
+    inconsistent edits are caught by `verify_log`. Tail truncation and complete
+    recomputation require an independently retained head/signature to detect.
   - Authenticity (needs the operator's key). `receipt_from_log` reconstructs a signed `Receipt` from
     the persisted entries, so the durable trail can still be handed to a relying party and verified
     with `verify_receipt` exactly like a live receipt.
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 from dataclasses import asdict
 
 from .control_plane import GENESIS, Entry, Receipt, _chain_step, _signing_payload
@@ -28,7 +30,8 @@ class AuditLog:
         self.path = path
 
     def append(self, entry: Entry) -> None:
-        with open(self.path, "a") as f:
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a") as f:
             f.write(json.dumps(asdict(entry), separators=(",", ":")) + "\n")
             f.flush()
             os.fsync(f.fileno())   # durable: survive a crash right after the write
@@ -44,11 +47,28 @@ class AuditLog:
                         entries.append(Entry(**json.loads(line)))
         return entries
 
+    @contextmanager
+    def locked(self):
+        """Serialize hook read/resume/append transactions on POSIX hosts."""
+        import fcntl
+
+        fd = os.open(self.path + ".lock", os.O_WRONLY | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
 
 def verify_log(path: str) -> tuple[bool, str]:
-    """Recompute the public hash-chain over the persisted entries. No key required. Catches any
-    inserted / deleted / reordered / altered line."""
-    entries = AuditLog.load(path)
+    """Check public chain consistency; not authenticity or completeness."""
+    return verify_entries(AuditLog.load(path))
+
+
+def verify_entries(entries: list[Entry]) -> tuple[bool, str]:
+    """Check a single snapshot. An unsigned chain cannot detect tail truncation
+    or a complete rewrite without an independently retained head/signature."""
     head = GENESIS
     for i, e in enumerate(entries):
         head = _chain_step(head, i, e.commit, e.verdict, e.reason, e.executed)
@@ -59,13 +79,13 @@ def verify_log(path: str) -> tuple[bool, str]:
 
 def receipt_from_log(path: str, agent_id: str, policy, signing_key) -> Receipt:
     """Reconstruct a signed Receipt from a persisted log (needs the operator's Ed25519 key). Raises if
-    the log fails its integrity check, so a tampered trail can never be re-signed into a valid receipt."""
+    the log is internally inconsistent. A recomputed or truncated chain can still pass."""
     from cryptography.hazmat.primitives import serialization
 
-    ok, why = verify_log(path)
+    entries = AuditLog.load(path)
+    ok, why = verify_entries(entries)
     if not ok:
         raise ValueError(why)
-    entries = AuditLog.load(path)
     head = entries[-1].head if entries else GENESIS
     sig = signing_key.sign(_signing_payload(agent_id, policy.root(), head, len(entries))).hex()
     pub = signing_key.public_key().public_bytes(

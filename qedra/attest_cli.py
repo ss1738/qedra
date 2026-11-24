@@ -2,15 +2,15 @@
 
 The hook (`qedra-hook` with GUARDRAIL_AUDIT_LOG set) appends every gated action to a durable, hash-chained
 JSONL log as the agent runs. This command reconstructs that log into a single Ed25519-signed Receipt that any
-third party -- an auditor, an insurer, a platform, another agent -- can verify with `qedra-verify` using only
-the public key. No trust in the operator, no secret shared.
+verifier can check with `qedra-verify` using an expected policy and public key.
+The signature attributes the statement; it does not prove complete observation.
 
     qedra-attest session.jsonl --agent-id my-agent --out receipt.json
     qedra-verify receipt.json --pin-key <printed-public-key>
 
 The signing key lives at ~/.qedra/signing_key (raw Ed25519, hex, mode 600) and is generated on first use.
 Its public key is printed so a relying party can pin the agent's identity to it. The log's integrity is
-checked first, so a tampered trail can never be re-signed into a valid receipt. Exit 0 = attested, 1 = the
+checked first. A truncated or fully recomputed unsigned chain can still pass. Exit 0 = attested, 1 = the
 log failed its integrity check or was unreadable, 2 = usage error.
 """
 from __future__ import annotations
@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 
 from .audit_log import receipt_from_log, verify_log
 from .control_plane import Policy
@@ -28,28 +29,32 @@ def _load_or_create_key(path: str):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     path = os.path.expanduser(path)
-    if os.path.exists(path):
-        return Ed25519PrivateKey.from_private_bytes(bytes.fromhex(open(path).read().strip()))
     key = Ed25519PrivateKey.generate()
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     raw = key.private_bytes_raw().hex()
     # write with restrictive permissions from the start (do not widen a pre-existing file)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(raw)
-    return key
+    if os.path.exists(path):
+        with open(path) as fh:
+            return Ed25519PrivateKey.from_private_bytes(bytes.fromhex(fh.read().strip()))
+    fd, temporary = tempfile.mkstemp(prefix=".qedra-key-", dir=os.path.dirname(path) or ".")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(raw)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(temporary, path)  # atomic publication; never replace another process's key
+            return key
+        except FileExistsError:
+            with open(path) as fh:
+                return Ed25519PrivateKey.from_private_bytes(bytes.fromhex(fh.read().strip()))
+    finally:
+        os.unlink(temporary)
 
 
 def _build_policy(args) -> Policy:
-    spec = None
-    if args.policy_spec:
-        from .guardrail import PolicySpec
-        spec = PolicySpec.from_json(open(args.policy_spec).read())
-    presets = [p.strip() for p in (args.preset or "").split(",") if p.strip()]
-    if presets:
-        from .presets import preset_spec
-        from .guardrail import DEFAULT_SPEC
-        spec = preset_spec(*presets, base=spec or DEFAULT_SPEC)
+    from .policy_config import load_policy_spec
+    spec = load_policy_spec(args.policy_spec, args.preset or "")
     return Policy(args.policy_id, args.policy_version, spec)
 
 
@@ -65,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--policy-version", default=os.environ.get("GUARDRAIL_POLICY_VERSION", "1"))
     p.add_argument("--preset", help="comma-separated presets layered on the default spec (e.g. 'devops')")
     p.add_argument("--policy-spec", help="path to a PolicySpec JSON (overrides the built-in default)")
-    p.add_argument("--key", default=os.environ.get("GUARDRAIL_SIGNING_KEY", "~/.qedra/signing_key"),
+    p.add_argument("--key", default=os.environ.get("GUARDRAIL_SIGNING_KEY_FILE", "~/.qedra/signing_key"),
                    help="Ed25519 signing key file (created on first use, mode 600)")
     p.add_argument("--out", help="write the receipt JSON here (default: stdout)")
     p.add_argument("-q", "--quiet", action="store_true", help="suppress the human-readable summary on stderr")
@@ -76,7 +81,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # integrity first: refuse to sign a tampered trail
-    ok, why = verify_log(args.log)
+    try:
+        ok, why = verify_log(args.log)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        print(f"error: could not read audit log ({type(exc).__name__})", file=sys.stderr)
+        return 1
     if not ok:
         print(f"error: {why}; refusing to attest", file=sys.stderr)
         return 1

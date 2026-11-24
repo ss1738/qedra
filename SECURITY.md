@@ -1,28 +1,27 @@
 # Security policy
 
-## Scope and honest expectations
+qedra is experimental. Its shell/file rules are heuristic, its executor is not an
+OS sandbox, and its custom ZK implementations have not had an external audit.
+See [THREAT_MODEL.md](THREAT_MODEL.md) and
+[the receipt trust model](docs/CONTROL_PLANE_TRUST_MODEL.md).
 
-qedra is an action-level gate for coding agents with a formally checked
-git-branch core and heuristic enforcement of the rest of its threat model (see
-[THREAT_MODEL.md](THREAT_MODEL.md)). It is defense in depth, not a sandbox. The
-heuristic rules (shell, secret, CI) are intentionally bypassable by obfuscation and
-are not claimed to be complete against a determined attacker.
+## Reporting
 
-## Reporting a hole
+Maintainer: [Satyawan Singh (@ss1738)](https://github.com/ss1738).
 
-Holes in the policy are the most useful contribution. If you find:
+For a non-sensitive issue, include the exact tool call with dummy credentials,
+the policy configuration, expected verdict, and actual result in a GitHub issue.
+Do not post real keys, private commands, audit logs, or disclosure witnesses.
 
-- a protected-history rewrite the z3 core admits (this would contradict the proof),
-- an obfuscation that evades the shell/secret/CI heuristics,
-- or a way for an out-of-process agent to bypass the gate,
+For sensitive findings, use GitHub's private vulnerability reporting option if it
+is enabled. Otherwise open an issue asking the maintainer for a private reporting
+channel, without including exploit details or private data.
 
-please open an issue, or for anything you consider sensitive, contact the maintainer
-before public disclosure. Include the exact tool call and the verdict you expected.
+Known heuristic bypasses are limitations, but common direct forms that evade the
+checks are still useful bug reports. Parser/model mismatches, verification bugs,
+secret leaks, and undocumented failures are also in scope for reporting.
 
-## What is not a vulnerability
+## Support
 
-- Bypassing a heuristic rule by obfuscation at the shell. This is documented and
-  expected; the shell layer is best-effort. Report it anyway if it is a common,
-  non-obvious form, but it is a precision improvement, not a boundary break.
-- Damage caused when the agent controls the gate process or the HMAC key. That is
-  outside the stated assumptions.
+There is no guaranteed response time or supported-version security SLA. Retain the
+exact source revision and policy spec when reporting or reproducing a result.

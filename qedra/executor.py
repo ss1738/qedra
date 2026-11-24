@@ -1,11 +1,13 @@
-"""Sandboxed tool executor. Real git/file/shell operations, but every call passes
-through the Guardrail first; a BLOCK/ESCALATE is never executed. A hard sandbox
-backstop refuses any path outside the working dir, so a guardrail bug in this demo
-still cannot touch the host (defense in depth: the guardrail is what we measure,
-the sandbox is what keeps a demo bug from nuking the box)."""
+"""Policy-gated git, file, and shell execution.
+
+File writes have a workspace path check. Shell execution is NOT sandboxed: a
+working directory and a regex cannot confine a process. Use OS-level isolation
+and least-privilege credentials for untrusted agents.
+"""
 from __future__ import annotations
 import os
 import re
+import shlex
 import subprocess
 
 from .guardrail import Action, Guardrail
@@ -29,7 +31,7 @@ class Executor:
         """The signed receipt for this session (or None if no control plane is attached)."""
         return self.control_plane.receipt() if self.control_plane is not None else None
 
-    # ---- backstop: nothing escapes the sandbox ---------------------------
+    # ---- write-path restriction (not a process sandbox) ------------------
     def _in_sandbox(self, path: str) -> bool:
         full = os.path.realpath(os.path.join(self.sandbox, path))
         return full == self.sandbox or full.startswith(self.sandbox + os.sep)
@@ -40,17 +42,37 @@ class Executor:
 
     # ---- the three tools the agent can call ------------------------------
     def git(self, args: str) -> str:
-        toks = args.split()
+        try:
+            toks = shlex.split(args)
+        except ValueError:
+            return "⛔ REFUSED: malformed git arguments."
+        if not toks or toks[0].startswith("-"):
+            return "⛔ REFUSED: start with a git subcommand; global options are not supported."
         op = toks[0] if toks else ""
-        force = "--force" in toks or "-f" in toks
+        force = "--mirror" in toks or any(t.startswith(("--force", "+")) or
+                    (t.startswith("-") and not t.startswith("--") and "f" in t[1:])
+                    for t in toks[1:])
         hard = "--hard" in toks
-        branch = ""
-        for t in toks:
-            if t in ("main", "master", "release", "dev", "feature"):
-                branch = t
-        if op in ("push", "reset", "rebase") and not branch:
-            branch = "main"  # assume current == main in this demo repo
-        a = Action("git", op=op, branch=branch, force=force, hard=hard)
+        # Resolve the actual current branch, including custom protected names.
+        current = self._run(["git", "symbolic-ref", "--quiet", "--short", "HEAD"])
+        branch = current.stdout.strip() if current.returncode == 0 else ""
+        named = set()
+        for t in toks[1:]:
+            for ref in t.lstrip("+").split(":"):
+                named.add(ref.removeprefix("refs/heads/"))
+        protected = set(self.guard.spec.protected_branches)
+        if named & protected:
+            branch = sorted(named & protected)[0]
+        if op == "push" and force:
+            # Refspecs, configured push destinations and --all/--mirror can target
+            # a branch other than HEAD. Unknown destinations need human review.
+            if named & protected or "--all" in toks or "--mirror" in toks:
+                branch = sorted(protected)[0] if protected else branch
+            else:
+                return "⛔ REFUSED: force-push destination requires human review."
+        if op in ("reset", "rebase") and not branch:
+            return "⛔ REFUSED: cannot resolve the branch for a history operation."
+        a = Action("git", op=op, branch=branch, force=force, hard=hard, cmd=args)
         d = self.guard.check(a)
         if d.verdict != "ALLOW":
             self.blocked.append(f"git {args}  ->  {d.verdict}: {d.reason}")
@@ -86,7 +108,7 @@ class Executor:
             self.blocked.append(f"shell '{cmd}'  ->  {d.verdict}: {d.reason}")
             self._record(a, d, False)
             return f"⛔ GUARDRAIL {d.verdict}: {d.reason}. Command not executed."
-        # backstop: only run inside sandbox, no absolute paths
+        # Convenience restriction only; this does not provide process isolation.
         if re.search(r"(^|\s)/", cmd):
             self._record(a, d, False)  # allowed by policy, but the sandbox backstop refused it
             return "⛔ SANDBOX: absolute path in command. Refused."
