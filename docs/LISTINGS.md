@@ -20,3 +20,18 @@ Suggested short description:
 Use the README as the source for current installation commands and limitations.
 Verify package availability and each registry's current schema before submitting
 or publishing. Do not reuse historical benchmark counts as current test results.
+
+## Glama build configuration
+
+Glama generates its own Dockerfile from the listing settings; it does not use the
+repository Dockerfile directly. Sync the repository before building, then use:
+
+- Python: `3.12` (covered by CI).
+- Build steps: `["uv sync --frozen --no-dev --extra mcp --python 3.12"]`.
+- CMD arguments: `["mcp-proxy", "--", "/app/.venv/bin/qedra-mcp"]`.
+- Placeholder environment: `{"GUARDRAIL_WORKSPACE":"/workspace"}`. Do not supply
+  personal credentials or a production repository for introspection.
+
+Create a release only from a successful build test of the intended source commit.
+Publishing a Glama release queues the tool definitions for TDQS evaluation; a
+successful build alone does not establish a quality grade or listing approval.

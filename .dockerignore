@@ -1,4 +1,10 @@
 .git
+.venv
+.pytest_cache
+.ruff_cache
+build
+dist
+*.egg-info
 docs
 tests
 scripts

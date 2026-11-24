@@ -4,6 +4,10 @@ Changes to qedra. Published package versions can lag the repository.
 
 ## Unreleased
 
+- Add parameter descriptions and clearer side-effect/limitation guidance to MCP
+  tool schemas for directory introspection. Use the frozen MCP dependency set in
+  the repository container and run its server as an unprivileged user.
+
 - Constrain the MCP SDK to the supported 1.x API, require Python 3.10+, and add a
   dependency lock plus CI coverage for all tests, MCP, attestation, and package lint.
 - Resolve actual/custom Git branches, handle force refspecs and mirror pushes,

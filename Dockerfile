@@ -7,14 +7,20 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY qedra ./qedra
 COPY integrations ./integrations
 
-RUN pip install --no-cache-dir ".[mcp]"
+RUN pip install --no-cache-dir uv==0.11.14 \
+    && uv sync --frozen --no-dev --extra mcp --python /usr/local/bin/python3
 
-ENV GUARDRAIL_WORKSPACE=/workspace
-RUN mkdir -p /workspace
+ENV GUARDRAIL_WORKSPACE=/workspace \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1
+RUN useradd --create-home --uid 10001 qedra \
+    && mkdir -p /workspace \
+    && chown qedra:qedra /workspace
+USER qedra
 
 # stdio MCP server
 CMD ["qedra-mcp"]

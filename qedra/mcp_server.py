@@ -31,6 +31,7 @@ Configuration is entirely by environment variable, so one install serves every r
 """
 import json
 import os
+from typing import Annotated
 
 
 def _signing_key():
@@ -49,6 +50,7 @@ def build_server():
     optional `mcp` extra; it is only required when the server is actually run."""
     try:
         from mcp.server.fastmcp import FastMCP
+        from pydantic import Field
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise SystemExit(
             "The MCP server needs the 'mcp' extra. Install it with:\n"
@@ -89,21 +91,32 @@ def build_server():
     mcp = FastMCP("qedra")
 
     @mcp.tool()
-    def run_shell(cmd: str) -> str:
-        """Run a shell command in the workspace. Blocked if it is a destructive action
-        (rm -rf the repo, secret exfiltration, force-push); otherwise executed."""
+    def run_shell(cmd: Annotated[str, Field(description="Bash command to run from the configured workspace, for example 'ls -la'. Do not include credentials or secret values.")]) -> str:
+        """Execute a Bash command after heuristic policy checks. Use for build,
+        test or inspection commands, not file writes or structured Git operations.
+        Returns truncated stdout/stderr, or a refusal prefixed with ⛔. BLOCK and
+        ESCALATE decisions are not executed. Shell execution is not sandboxed;
+        passing a check does not establish that a command is safe."""
         return ex.run_shell(cmd)
 
     @mcp.tool()
-    def write_file(path: str, content: str) -> str:
-        """Write a file in the workspace. Blocked if it writes a secret or empties a CI
-        config; otherwise executed."""
+    def write_file(
+        path: Annotated[str, Field(description="Destination file path relative to the configured workspace, for example 'src/config.json'. Paths outside the workspace are refused.")],
+        content: Annotated[str, Field(description="Complete replacement text for the file, not a patch. Existing content is overwritten. Do not include secrets.")],
+    ) -> str:
+        """Create or overwrite one workspace file after policy checks. Creates
+        parent directories as needed. Recognized secret values and empty workflow
+        writes are blocked. Returns a write summary or a refusal prefixed with ⛔.
+        This is a whole-file replacement; read and preserve needed content first."""
         return ex.write_file(path, content)
 
     @mcp.tool()
-    def git(args: str) -> str:
-        """Run a git command, e.g. 'add -A', 'commit -m fix'. A force-push, hard-reset,
-        or rebase of a protected branch is blocked; normal git is executed."""
+    def git(args: Annotated[str, Field(description="Git subcommand and arguments without a leading 'git', for example 'status --short' or 'commit -m \"fix input\"'. Shell syntax and global options such as -C are not supported.")]) -> str:
+        """Execute Git in the workspace after structured branch-policy checks.
+        Use this rather than run_shell for Git operations. Protected-branch force
+        pushes, hard resets and rebases are blocked; unresolved force destinations
+        are refused for human review. Quoting is preserved. Returns truncated
+        stdout/stderr or a refusal prefixed with ⛔; it is not a proof of success."""
         return ex.git(args)
 
     @mcp.tool()
@@ -128,7 +141,7 @@ def build_server():
         }, indent=2)
 
     @mcp.tool()
-    def session_receipt(redact: bool = False) -> str:
+    def session_receipt(redact: Annotated[bool, Field(description="Set true to omit raw commands, file contents, branch names and salts before sharing. False returns private action data; do not share it without inspection.")] = False) -> str:
         """Export a signed statement of recorded decisions. Verification checks its
         signature, chain and disclosed policy verdicts, not execution or completeness.
         Use an independently obtained policy and pinned key for attribution.

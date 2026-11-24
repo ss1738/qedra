@@ -55,6 +55,21 @@ def test_build_server_constructs_with_a_preset():
         assert server.name == "qedra"
 
 
+def test_tool_parameters_explain_inputs_and_side_effects():
+    import asyncio
+    from qedra.mcp_server import build_server
+
+    with _env(GUARDRAIL_WORKSPACE=tempfile.mkdtemp()):
+        tools = {tool.name: tool for tool in asyncio.run(build_server().list_tools())}
+    expected = {"run_shell": ("cmd",), "write_file": ("path", "content"),
+                "git": ("args",), "session_receipt": ("redact",)}
+    for name, parameters in expected.items():
+        for parameter in parameters:
+            assert tools[name].inputSchema["properties"][parameter]["description"]
+    assert "overwrite" in tools["write_file"].description
+    assert "not sandboxed" in tools["run_shell"].description
+
+
 if __name__ == "__main__":
     fns = [f for n, f in sorted(globals().items()) if n.startswith("test_")]
     ok = 0
