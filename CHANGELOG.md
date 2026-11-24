@@ -4,6 +4,10 @@ Changes to qedra. Published package versions can lag the repository.
 
 ## Unreleased
 
+- Remove unused media with obsolete branding and its static animation generator.
+  Ignore local environment, editor, and coverage files; correct unsupported claims
+  in demo and workflow-sampling descriptions.
+
 - Add parameter descriptions and clearer side-effect/limitation guidance to MCP
   tool schemas for directory introspection. Use the frozen MCP dependency set in
   the repository container and run its server as an unprivileged user.

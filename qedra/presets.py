@@ -1,14 +1,13 @@
 """Opt-in policy presets: curated patterns for threats beyond the default git/file/local-shell model.
 
-The built-in default is validated for false friction on thousands of real CI commands, so it stays
-lean. But an agent with cloud or database credentials can destroy far more than a repo. These presets
-add high-precision, catastrophic infra/data-destruction patterns as an OPT-IN `extra_shell_denylist`,
-so a team running an agent with real access can turn them on without changing the validated default.
+An agent with cloud or database credentials can affect resources beyond a repository.
+These presets add patterns for selected infrastructure and data-destruction commands
+as an opt-in `extra_shell_denylist`, without changing the default policy.
 
     from qedra.presets import preset_spec
     policy = Policy("prod", spec=preset_spec("devops"))          # default rules + devops kill-commands
 
-They are heuristics (regex over shell), high-precision but bypassable by obfuscation, exactly like the
+They are heuristics (regex over shell), bypassable by obfuscation, exactly like the
 built-in shell rules. Catch the direct forms; pair with least-privilege credentials and a sandbox.
 """
 from __future__ import annotations

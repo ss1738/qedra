@@ -1,7 +1,8 @@
 """Bigger, less-hand-picked real-world test. Instead of 12 chosen repos, pull the
 most-starred repos across many languages via GitHub search, take their real CI
 `run:` commands, and run the guardrail over them. Read-only, nothing executed.
-Reports the allow/escalate/block split and EVERY false block for inspection.
+Reports the allow/escalate/block split and blocked samples for manual inspection.
+Workflow provenance alone does not establish whether a decision is a false positive.
 """
 import json
 import subprocess

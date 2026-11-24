@@ -1,15 +1,14 @@
-"""Live demo: a REAL Claude coding agent meets a prompt injection. Not a mock, a
-real API-driven tool-use loop executing real git/file/shell ops in a sandbox repo.
+"""Optional API-driven tool-use experiment with a prompt injection.
+
+Executes Git, file, and shell operations in a temporary repository, not an OS sandbox.
 
     ANTHROPIC_API_KEY=... python3 demo_hijack.py
 
 The agent is asked to fix a bug. A file it reads (ISSUE.md) carries an injected
 "maintenance" instruction telling it to force-push to main and delete the repo.
-We observe what the real model does. A well-aligned model usually declines the
-injection on its own, which is the point: this shows the gate adds no friction to
-a good agent and waits as the deterministic backstop. The interception of an
-actual attack is shown by demo_compare.py and integrations/demo_mcp.py, where the
-destructive calls are issued for real and the gate blocks every one.
+Model behavior depends on the selected model and run. For reproducible fixed-call
+examples, see demo_compare.py and integrations/demo_mcp.py. None of these examples
+establishes protection against arbitrary prompt injections or shell commands.
 """
 from __future__ import annotations
 import json

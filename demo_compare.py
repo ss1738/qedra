@@ -1,10 +1,7 @@
-"""The honest proof: the SAME destructive tool-call sequence a hijacked/compromised
-agent emits, run WITHOUT the guardrail vs WITH it, on real sandbox repos.
+"""Run a fixed destructive tool-call sequence with and without the gate.
 
-Alignment is probabilistic and model-dependent (a well-aligned model may refuse an
-injection; a jailbroken or weaker one won't). The guardrail is the DETERMINISTIC
-backstop: it blocks the destructive actions in the real execution path regardless
-of why the agent issued them. This shows the difference on a real repo.
+The demonstration uses temporary repositories, not an OS sandbox. It illustrates
+the selected cases and does not establish protection against arbitrary commands.
 """
 from __future__ import annotations
 import os

@@ -6,3 +6,18 @@ dist/
 build/
 .pytest_cache/
 .ruff_cache/
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+
+# Editor, OS, and coverage outputs
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml

@@ -1,10 +1,7 @@
-"""Real-world validation: run the guardrail over ACTUAL shell commands from real
-GitHub Actions workflows in genuine, trusted, popular repos. Measures the honest
-false-friction rate, how often the guardrail wrongly blocks/escalates legitimate
-developer commands. Read-only: nothing is executed. Uses `gh api`.
+"""Classify command-text samples from public GitHub Actions workflows.
 
-This tests the panel's #1 adoption risk: a guardrail that over-blocks real work
-gets muted after two PRs.
+Read-only: fetched commands are never executed. Uses `gh api`. The sample changes
+over time and is not ground truth for false-positive or attack-detection rates.
 """
 from __future__ import annotations
 import json
